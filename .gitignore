@@ -1,0 +1,12 @@
+# System files
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# Temporary images (optional: if you don't want those copies pushed)
+assets/
