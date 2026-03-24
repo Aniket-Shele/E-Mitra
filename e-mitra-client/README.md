@@ -82,7 +82,3 @@ The system will transcribe your speech, analyze your tone, evaluate your facial 
 
 
 ***
-
-That covers everything an open-source developer or a recruiter needs to know to clone and run your exact setup. 
-
-Now that your code is safely version-controlled on GitHub and the perception engine is flawless, would you like to finally build the **Active Reasoning (Phase 3)** logic, where E-Mitra decides *how* to reply based on that fused emotion score?
