@@ -1,57 +1,88 @@
-1. The Development Environment
-Frontend: Node.js installed on your machine to run React.
+# E-Mitra: Empathetic AI Companion 🧠💙
 
-Backend: Python 3.9+ virtual environment (same as before).
+E-Mitra (Sanskrit for "Friend") is an advanced, privacy-first multimodal AI companion designed to provide cognitive and emotional support. 
 
-2. Frontend Needs (React Libraries)
-Initialize your React app using Vite (it's much faster than Create React App): npm create vite@latest e-mitra-client -- --template react
+Instead of relying solely on text, E-Mitra perceives user states through a **Tri-Modal Late Fusion Engine**. It simultaneously analyzes semantic meaning (Text), vocal prosody (Audio/Tone), and facial expressions (Computer Vision) to calculate a unified, highly accurate emotional consensus.
 
-Navigate into the folder, run npm install, and then install these specific packages for multimodal capture:
+## ✨ Core Features (Phase 1 & 2)
+* **Semantic Analysis:** Analyzes text input using DistilRoBERTa.
+* **Vocal Prosody Analysis:** Analyzes audio tone and pitch using Wav2Vec2.
+* **Automatic Speech Recognition (ASR):** Uses OpenAI's Whisper (Tiny) to automatically transcribe spoken words into text.
+* **Facial Expression Detection:** Uses a Vision Transformer (ViT) to analyze webcam keyframes.
+* **Late Fusion Consensus:** A weighted algorithm that mathematically fuses conflicting multimodal data (e.g., Happy Words + Sad Voice) into a single dominant emotional state.
+* **Privacy-First:** Transcripts, audio blobs, and video frames are processed entirely in RAM and immediately destroyed. **Zero transcripts are stored.**
 
-npm install react-webcam: A fantastic, lightweight wrapper that handles browser camera permissions and makes grabbing image frames (for Video/Expressions) incredibly easy.
+## 🛠️ Technology Stack
+* **Frontend:** React.js (Vite), `react-webcam`, `react-media-recorder`
+* **Backend:** Python, FastAPI, Uvicorn
+* **AI/Machine Learning:** Hugging Face `transformers`, PyTorch, Pillow
 
-npm install react-media-recorder: A clean hook-based library to handle the microphone permissions and capture audio blobs.
+---
 
-npm install axios: (Optional but recommended) Makes sending the multipart form data (text, image, audio) to your Python backend much cleaner than the native fetch API.
+## 🚀 Getting Started
 
-3. Backend Needs (Python Libraries)
-This remains exactly the same. * pip install fastapi uvicorn python-multipart (To receive the files).
+### Prerequisites
+Before running this project, ensure you have the following installed on your system:
+1. **Node.js** (v16 or higher)
+2. **Python** (v3.9 or higher)
+3. **FFmpeg** (Required for audio processing)
+   * Mac: `brew install ffmpeg`
+   * Windows: Install via `winget install ffmpeg` or download from the official site.
 
-Your AI libraries: transformers, torch, librosa, opencv-python, mediapipe.
+### 1. Backend Setup (FastAPI & AI Models)
+Open a terminal and navigate to your backend folder (e.g., `e-mitra-backend`).
 
-4. The Step-by-Step Implementation Flow
-Step 1: Set Up the UI Grid
-Create a simple dashboard layout in React. You need three distinct sections:
+```bash
+# Create a virtual environment
+python -m venv venv
 
-A text chat input box.
+# Activate the virtual environment
+# On Mac/Linux:
+source venv/bin/activate
+# On Windows:
+venv\Scripts\activate
 
-A live video feed displaying the webcam.
+# Install required Python libraries
+pip install fastapi uvicorn python-multipart transformers torch Pillow
 
-An audio recording button (Start/Stop).
+2. Frontend Setup (React/Vite)
+Open a second terminal and navigate to your frontend folder (e.g., e-mitra-client).
 
-Step 2: Capture the Video Frame
-Using react-webcam, you will set a ref to the webcam component. Every time the user submits a text message, you trigger a function that grabs the current frame as a base64 string or an image file:
-const imageSrc = webcamRef.current.getScreenshot();
+Bash
+# Install Node dependencies
+npm install
 
-Step 3: Capture the Audio Snippet
-Using react-media-recorder, wrap your microphone button. When the user holds the button down, it records. When they release it, the library provides a mediaBlobUrl. You will convert this URL into an actual audio file blob to send to the server.
+# Install required media libraries
+npm install react-webcam react-media-recorder
+💻 Running the Application
+You must run both the backend and frontend servers simultaneously.
 
-Step 4: Package and Send (The Integration)
-When the user clicks "Send", you will bundle all three inputs into a single FormData object in React:
+Terminal 1 (Backend):
 
-The text string.
+Bash
+uvicorn main:app --reload
+Note: The very first time you boot the server, it will take a few minutes to download the Hugging Face models (~1GB total) to your local cache. Subsequent boot times will be practically instant.
 
-The Audio Blob (converted to a .wav).
+Terminal 2 (Frontend):
 
-The Image file (converted from the webcam screenshot).
+Bash
+npm run dev
+Navigate to http://localhost:5173 in your browser.
 
-You then use axios.post('http://localhost:8000/process-multimodal', formData) to shoot it over to Python.
+🧪 How to Use the Diagnostic Dashboard
+Ensure your browser has granted Camera and Microphone permissions.
 
-Step 5: Receive in FastAPI
-Your Python server will have a single endpoint that looks something like this, ready to catch the data:
+Leave the text override box blank to test the full pipeline.
 
-Python
-@app.post("/process-multimodal")
-async def process_inputs(text: str = Form(...), audio: UploadFile = File(...), video_frame: UploadFile = File(...)):
-    # Your fusion logic will go here
-    return {"status": "success"}
+Click Start Recording, look at the camera, and speak a sentence expressing an emotion.
+
+Click Stop Recording, then click Initialize Analysis.
+
+The system will transcribe your speech, analyze your tone, evaluate your facial expression, and output the final E-Mitra Consensus.
+
+
+***
+
+That covers everything an open-source developer or a recruiter needs to know to clone and run your exact setup. 
+
+Now that your code is safely version-controlled on GitHub and the perception engine is flawless, would you like to finally build the **Active Reasoning (Phase 3)** logic, where E-Mitra decides *how* to reply based on that fused emotion score?
