@@ -4,9 +4,21 @@
 # Python
 __pycache__/
 *.pyc
+venv/
+env/
+.pytest_cache/
 
-# Node
+# Node / React
 node_modules/
+dist/
+.env
 
-# Temporary images (optional: if you don't want those copies pushed)
+# Temporary images
 assets/
+
+# E-Mitra Specific Files (Heavy Videos, Audio, and local DBs)
+e-mitra-backend/ravdess_test/
+e-mitra-backend/therapist_diary.json
+*.mp4
+*.wav
+*.webm
