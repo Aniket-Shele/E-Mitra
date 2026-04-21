@@ -1,7 +1,7 @@
 # System files
 .DS_Store
 
-# Python
+# Python Environments & Cache
 __pycache__/
 *.pyc
 venv/
@@ -11,14 +11,19 @@ env/
 # Node / React
 node_modules/
 dist/
+npm-debug.log*
+
+# 🚨 SECRETS (NEVER UPLOAD THESE)
 .env
+*.env
+.env.local
 
-# Temporary images
+# Temporary Media & E-Mitra Specific Files
 assets/
-
-# E-Mitra Specific Files (Heavy Videos, Audio, and local DBs)
 e-mitra-backend/ravdess_test/
 e-mitra-backend/therapist_diary.json
+e-mitra-backend/temp_*.webm
+e-mitra-backend/converted_*.wav
 *.mp4
 *.wav
 *.webm
