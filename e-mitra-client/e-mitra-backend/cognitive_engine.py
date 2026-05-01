@@ -2,22 +2,37 @@ import os
 from pymongo import MongoClient
 import ollama
 from dotenv import load_dotenv
+from cryptography.fernet import Fernet
 
-# Load the connection string from your .env file
+# Load variables from .env
 load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
+ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 
-# --- DATABASE SETUP (MONGODB ATLAS) ---
-print("Connecting to MongoDB Atlas Cognitive Core...")
-
-# 🚨 SAFETY CHECK: Ensure the .env file was loaded
-if not MONGO_URI:
-    print("❌ ERROR: MONGO_URI is missing! Please make sure your .env file is saved in the same folder as this script.")
+# --- SECURITY & ENCRYPTION SETUP ---
+if not MONGO_URI or not ENCRYPTION_KEY:
+    print("❌ ERROR: MONGO_URI or ENCRYPTION_KEY is missing from your .env file!")
     exit()
 
+cipher_suite = Fernet(ENCRYPTION_KEY.encode())
+
+def encrypt_data(text: str) -> str:
+    """Scrambles plain text into AES-encrypted ciphertext."""
+    if not text: return text
+    return cipher_suite.encrypt(text.encode()).decode()
+
+def decrypt_data(ciphertext: str) -> str:
+    """Unscrambles ciphertext back to plain text."""
+    if not ciphertext: return ciphertext
+    try:
+        return cipher_suite.decrypt(ciphertext.encode()).decode()
+    except:
+        return ciphertext # Fallback just in case old unencrypted data is in the DB
+
+# --- DATABASE SETUP (MONGODB ATLAS) ---
+print("Connecting to MongoDB Atlas Cognitive Core (Encrypted Mode)...")
 try:
     client = MongoClient(MONGO_URI)
-    # Send a ping to confirm a successful connection
     client.admin.command('ping')
     print("✅ Pinged your deployment. You successfully connected to MongoDB Atlas!")
 except Exception as e:
@@ -25,33 +40,36 @@ except Exception as e:
     exit()
 
 db = client.emitra_db
-users_collection = db.users       # Permanent Memory (Profiles)
-diary_collection = db.diary       # Semi-Permanent Memory (Metadata)
-sessions_collection = db.sessions # Temporary Memory
+users_collection = db.users       
+diary_collection = db.diary       
+sessions_collection = db.sessions 
 
 def check_user_exists(user_id: str):
-    """Checks if a user profile already exists in MongoDB."""
+    """Checks if user exists, and decrypts their profile for the frontend."""
     user = users_collection.find_one({"user_id": user_id}, {"_id": 0})
-    if user:
-        return {"exists": True, "profile": user["profile"]}
+    if user and "profile" in user:
+        decrypted_profile = {k: decrypt_data(v) for k, v in user["profile"].items()}
+        return {"exists": True, "profile": decrypted_profile}
     return {"exists": False}
 
 def create_user_profile(user_id: str, profile_data: dict):
-    """Saves a new user's clinical intake form to Permanent Memory."""
+    """Encrypts all profile fields before saving to Permanent Memory."""
+    encrypted_profile = {k: encrypt_data(str(v)) for k, v in profile_data.items()}
     users_collection.update_one(
         {"user_id": user_id},
-        {"$set": {"profile": profile_data}},
+        {"$set": {"profile": encrypted_profile}},
         upsert=True
     )
 
 def save_to_mongo_diary(user_id: str, new_fact: str):
-    """Appends an extracted fact to the user's semi-permanent diary in MongoDB"""
+    """Encrypts extracted facts before appending to the diary."""
+    encrypted_fact = encrypt_data(new_fact)
     diary_collection.update_one(
         {"user_id": user_id},
-        {"$addToSet": {"known_facts": new_fact}}, # $addToSet prevents duplicates
+        {"$addToSet": {"known_facts": encrypted_fact}}, 
         upsert=True
     )
-    print(f"📝 Therapist Note Taken for {user_id}: {new_fact}")
+    print(f"📝 Secure Therapist Note Taken for {user_id}: [ENCRYPTED]")
 
 def extract_profile_data(user_id: str, user_message: str):
     """Runs silently in the background to extract psychological metadata."""
@@ -69,21 +87,22 @@ def extract_profile_data(user_id: str, user_message: str):
         print(f"Note-taker error: {e}")
 
 def generate_chat_response(user_id: str, user_message: str, emotion_state: str, clinical_strategy: str, emotion_journey: list, chat_history: list):
-    """Constructs the prompt with all Memory Tiers and queries Ollama."""
+    """Decrypts data to construct the prompt, then queries Ollama."""
     
-    # 1. Fetch Permanent Memory (User Profile)
+    # 1. Fetch & Decrypt Permanent Memory
     user_data = users_collection.find_one({"user_id": user_id})
     profile_str = ""
     if user_data and "profile" in user_data:
-        for key, value in user_data["profile"].items():
-            profile_str += f"- {key.replace('_', ' ').title()}: {value}\n"
+        for key, encrypted_value in user_data["profile"].items():
+            decrypted_val = decrypt_data(encrypted_value)
+            profile_str += f"- {key.replace('_', ' ').title()}: {decrypted_val}\n"
 
-    # 2. Fetch Semi-Permanent Memory (Diary)
+    # 2. Fetch & Decrypt Semi-Permanent Memory
     diary_data = diary_collection.find_one({"user_id": user_id})
     known_facts_str = "No prior notes recorded yet."
     diary_context = []
     if diary_data and "known_facts" in diary_data:
-        diary_context = diary_data["known_facts"]
+        diary_context = [decrypt_data(fact) for fact in diary_data["known_facts"]]
         known_facts_str = "\n".join([f"- {fact}" for fact in diary_context])
 
     # 3. Process the Temporal Emotional Journey
@@ -112,17 +131,10 @@ def generate_chat_response(user_id: str, user_message: str, emotion_state: str, 
     """
     
     try:
-        # Build the memory block for Ollama
         messages_for_ollama = [{'role': 'system', 'content': system_prompt}]
-        
-        # Inject previous conversation flow
-        for msg in chat_history: 
-            messages_for_ollama.append(msg)
-            
-        # Inject the current message
+        for msg in chat_history: messages_for_ollama.append(msg)
         messages_for_ollama.append({'role': 'user', 'content': user_message})
 
-        # Ask Ollama
         response = ollama.chat(model='llama3.1', messages=messages_for_ollama)
         ai_reply = response['message']['content']
         

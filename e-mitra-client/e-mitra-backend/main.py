@@ -1,4 +1,4 @@
-# main.py
+import asyncio
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -17,7 +17,10 @@ from emotiefflib.facial_analysis import EmotiEffLibRecognizer
 import warnings
 from transformers import logging as hf_logging
 
-# 🚨 IMPORT OUR NEW COGNITIVE ENGINE
+# 🚨 1. IMPORT FASTER-WHISPER ENGINE
+from faster_whisper import WhisperModel
+
+# Import Cognitive Engine Core
 from cognitive_engine import (
     check_user_exists, 
     create_user_profile, 
@@ -41,7 +44,10 @@ text_v2 = pipeline("text-classification", model="j-hartmann/emotion-english-dist
 print("Loading Audio Models...")
 audio_v1 = pipeline("audio-classification", model="superb/wav2vec2-base-superb-er") 
 audio_v2 = pipeline("audio-classification", model="ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition") 
-asr_model = pipeline("automatic-speech-recognition", model="openai/whisper-tiny.en")
+
+# 🚨 2. LOAD FASTER-WHISPER (Int8 Quantization makes CPU inference lightning fast)
+print("Loading Faster-Whisper (base.en)...")
+whisper_model = WhisperModel("base.en", device="cpu", compute_type="int8")
 
 print("Loading Video Models...")
 video_v1 = pipeline("image-classification", model="dima806/facial_emotions_image_detection") 
@@ -50,9 +56,18 @@ video_v2_labels = ['anger', 'contempt', 'disgust', 'fear', 'happiness', 'neutral
 
 print("Loading OpenCV Face Detector...")
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-print("System Online!")
+print("System Online! Ready for Parallel Processing.")
 
-# --- PIPELINE FUNCTIONS ---
+# --- PIPELINE HELPER FUNCTIONS ---
+def run_faster_whisper(audio_path):
+    """Runs the optimized CTranslate2 Whisper model"""
+    try:
+        segments, _ = whisper_model.transcribe(audio_path, beam_size=5)
+        return " ".join([segment.text for segment in segments]).strip()
+    except Exception as e:
+        print(f"Whisper Error: {e}")
+        return ""
+
 def normalize_emotions(raw_scores, modality):
     normalized = {"happy": 0.0, "sad": 0.0, "angry": 0.0, "neutral": 0.0, "anxious_fear": 0.0}
     TEXT_MAP = {"joy": "happy", "sadness": "sad", "anger": "angry", "disgust": "angry", "neutral": "neutral", "fear": "anxious_fear", "surprise": "anxious_fear"}
@@ -126,27 +141,17 @@ def determine_strategy(fused_scores):
     else: return {"name": "Active Probing", "description": "Ask open-ended questions."}
 
 
-# --- API ENDPOINTS (ROUTING TO COGNITIVE ENGINE) ---
+# --- API ENDPOINTS ---
 class UserProfile(BaseModel):
-    user_id: str
-    name: str
-    age: str
-    occupation: str
-    living_situation: str
-    baseline_personality: str
-    primary_goal: str
-    coping_mechanisms: str
-    support_system: str
-    triggers: str
+    user_id: str; name: str; age: str; situation: str; coping_style: str
+    additional_info: str; support_system: str; current_stressor: str
+    feeling_scale: str; sleep_quality: str; intense_emotions: str; personality: str; triggers: str
 
 @app.get("/api/users/{user_id}")
-async def check_user(user_id: str):
-    """Checks if a user profile already exists in MongoDB."""
-    return check_user_exists(user_id)
+async def check_user(user_id: str): return check_user_exists(user_id)
 
 @app.post("/api/users")
 async def create_user(profile: UserProfile):
-    """Saves a new user's clinical intake form to Permanent Memory."""
     profile_data = profile.dict()
     user_id = profile_data.pop("user_id") 
     create_user_profile(user_id, profile_data)
@@ -161,9 +166,14 @@ async def analyze_multimodal(
     audio_model_choice: str = Form("v1"), 
     video_model_choice: str = Form("v2")
 ):
+    """🚨 OPTIMIZED PARALLEL MULTIMODAL PIPELINE"""
+    
     results = {"text_emotions": [], "audio_emotions": [], "video_emotions": [], "frame_emotions": [], "transcribed_text": "", "fused_score": [], "strategy": {}}
     final_text_to_analyze = text.strip()
+    wav_file_path = None
+    temp_file_path = None
     
+    # 1. AUDIO PRE-PROCESSING & TRANSCRIPTION
     if audio:
         temp_file_path = f"temp_{audio.filename}"
         wav_file_path = f"converted_{audio.filename}.wav" 
@@ -172,24 +182,31 @@ async def analyze_multimodal(
             audio_clip = AudioFileClip(temp_file_path)
             audio_clip.write_audiofile(wav_file_path, fps=16000, codec='pcm_s16le', ffmpeg_params=["-ac", "1"], logger=None)
             audio_clip.close()
-            raw_audio = audio_v2(wav_file_path) if audio_model_choice == "v2" else audio_v1(wav_file_path)
-            results["audio_emotions"] = normalize_emotions(raw_audio, "audio")
-            transcription = asr_model(wav_file_path)
-            results["transcribed_text"] = transcription["text"].strip()
-            if not final_text_to_analyze: final_text_to_analyze = results["transcribed_text"]
-        except Exception as e: print(f"Audio error: {e}")
-        finally:
-            if os.path.exists(temp_file_path): os.remove(temp_file_path)
-            if os.path.exists(wav_file_path): os.remove(wav_file_path)
-                
-    if final_text_to_analyze:
-        raw_text = text_v2(final_text_to_analyze)[0] if text_model == "v2" else text_v1(final_text_to_analyze)[0]
-        results["text_emotions"] = normalize_emotions(raw_text, "text")
+            
+            # Run Faster-Whisper off the main thread so it doesn't freeze the server
+            transcription = await asyncio.to_thread(run_faster_whisper, wav_file_path)
+            results["transcribed_text"] = transcription
+            if not final_text_to_analyze: final_text_to_analyze = transcription
+        except Exception as e: print(f"Audio extraction error: {e}")
 
-    if images_base64:
+    # ==========================================
+    # 2. DEFINE CONCURRENT MACHINE LEARNING TASKS
+    # ==========================================
+    def process_text_emotion():
+        if not final_text_to_analyze: return []
+        raw_text = text_v2(final_text_to_analyze)[0] if text_model == "v2" else text_v1(final_text_to_analyze)[0]
+        return normalize_emotions(raw_text, "text")
+
+    def process_audio_emotion():
+        if not wav_file_path or not os.path.exists(wav_file_path): return []
+        raw_audio = audio_v2(wav_file_path) if audio_model_choice == "v2" else audio_v1(wav_file_path)
+        return normalize_emotions(raw_audio, "audio")
+
+    def process_video_emotion():
+        if not images_base64 or images_base64 == "[]": return [], []
         try:
             frames = json.loads(images_base64)
-            all_frame_scores = []
+            all_frame_scores, frame_emotions_log = [], []
             for b64 in frames:
                 header, encoded = b64.split(",", 1)
                 img = Image.open(BytesIO(base64.b64decode(encoded)))
@@ -198,45 +215,47 @@ async def analyze_multimodal(
                 if preds: 
                     all_frame_scores.append(preds)
                     norm_frame = normalize_emotions(preds, "video")
-                    results["frame_emotions"].append(norm_frame[0]['label'].upper() if norm_frame else "NO FACE")
+                    frame_emotions_log.append(norm_frame[0]['label'].upper() if norm_frame else "NO FACE")
                 else:
-                    results["frame_emotions"].append("NO FACE")
+                    frame_emotions_log.append("NO FACE")
             
+            video_norm = []
             if all_frame_scores:
                 avg_scores = {}
                 for fp in all_frame_scores:
                     for p in fp: avg_scores[p['label']] = avg_scores.get(p['label'], 0) + p['score']
-                num_frames = len(all_frame_scores)
-                raw_video = sorted([{"label": k, "score": v / num_frames} for k, v in avg_scores.items()], key=lambda x: x['score'], reverse=True)
-                results["video_emotions"] = normalize_emotions(raw_video, "video")
-        except Exception as e: print(e)
-    
+                raw_video = sorted([{"label": k, "score": v / len(all_frame_scores)} for k, v in avg_scores.items()], key=lambda x: x['score'], reverse=True)
+                video_norm = normalize_emotions(raw_video, "video")
+            return video_norm, frame_emotions_log
+        except Exception as e: return [], []
+
+    # ==========================================
+    # 3. EXECUTE MODELS IN PARALLEL
+    # ==========================================
+    # This fires all three heavy ML operations simultaneously
+    text_task = asyncio.to_thread(process_text_emotion)
+    audio_task = asyncio.to_thread(process_audio_emotion)
+    video_task = asyncio.to_thread(process_video_emotion)
+
+    # Wait for all 3 threads to finish at the exact same time
+    results["text_emotions"], results["audio_emotions"], (results["video_emotions"], results["frame_emotions"]) = await asyncio.gather(text_task, audio_task, video_task)
+
+    # 4. CLEANUP & FUSION
+    if temp_file_path and os.path.exists(temp_file_path): os.remove(temp_file_path)
+    if wav_file_path and os.path.exists(wav_file_path): os.remove(wav_file_path)
+
     results["fused_score"] = perform_late_fusion(results["text_emotions"], results["audio_emotions"], results["video_emotions"])
     results["strategy"] = determine_strategy(results["fused_score"])
     return results
 
 class ChatRequest(BaseModel):
-    user_id: str 
-    user_message: str
-    emotion_state: str
-    clinical_strategy: str
-    emotion_journey: list = []
-    chat_history: list = []
+    user_id: str; user_message: str; emotion_state: str; clinical_strategy: str; emotion_journey: list = []; chat_history: list = []
 
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
-    """Routes the chat request to the Cognitive Engine for LLM processing."""
-    
     result = generate_chat_response(
-        user_id=request.user_id,
-        user_message=request.user_message,
-        emotion_state=request.emotion_state,
-        clinical_strategy=request.clinical_strategy,
-        emotion_journey=request.emotion_journey,
-        chat_history=request.chat_history
+        user_id=request.user_id, user_message=request.user_message, emotion_state=request.emotion_state,
+        clinical_strategy=request.clinical_strategy, emotion_journey=request.emotion_journey, chat_history=request.chat_history
     )
-    
-    # Run background note-taker via the cognitive engine
     background_tasks.add_task(extract_profile_data, request.user_id, request.user_message)
-    
     return result
