@@ -75,7 +75,7 @@ def normalize_emotions(raw_scores, modality):
     VIDEO_MAP = {"happiness": "happy", "happy": "happy", "sadness": "sad", "sad": "sad", "anger": "angry", "angry": "angry", "contempt": "angry", "disgust": "anxious_fear", "neutral": "neutral", "fear": "anxious_fear", "surprise": "anxious_fear"}
     
     DAMPEN_LABELS = {"contempt", "disgust"}
-    BOOST_LABELS = {"sadness": 1.5, "fear": 1.5, "surprise": 1.2, "anger": 1.2, "happiness": 1.0}
+    BOOST_LABELS = {"sadness": 1.5, "fear": 1.0, "surprise": 1.2, "anger": 1.2, "happiness": 1.0}
     mapping = TEXT_MAP if modality == "text" else AUDIO_MAP if modality == "audio" else VIDEO_MAP
 
     if not raw_scores: return []
@@ -249,13 +249,14 @@ async def analyze_multimodal(
     return results
 
 class ChatRequest(BaseModel):
-    user_id: str; user_message: str; emotion_state: str; clinical_strategy: str; emotion_journey: list = []; chat_history: list = []
+    user_id: str; user_message: str; emotion_state: str; clinical_strategy: str; emotion_journey: list = []; chat_history: list = []; language: str = "English"
 
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
     result = generate_chat_response(
         user_id=request.user_id, user_message=request.user_message, emotion_state=request.emotion_state,
-        clinical_strategy=request.clinical_strategy, emotion_journey=request.emotion_journey, chat_history=request.chat_history
+        clinical_strategy=request.clinical_strategy, emotion_journey=request.emotion_journey, chat_history=request.chat_history,
+        language=request.language
     )
     background_tasks.add_task(extract_profile_data, request.user_id, request.user_message)
     return result

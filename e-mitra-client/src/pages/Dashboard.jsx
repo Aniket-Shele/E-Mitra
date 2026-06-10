@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import Webcam from 'react-webcam';
 import { useReactMediaRecorder } from 'react-media-recorder';
-import { FaUserMd, FaVideo, FaMicrophone, FaFileAlt, FaBrain, FaRegCommentDots, FaClock, FaPowerOff } from 'react-icons/fa';
+import { FaUserMd, FaVideo, FaMicrophone, FaFileAlt, FaBrain, FaRegCommentDots, FaClock, FaPowerOff, FaVolumeUp } from 'react-icons/fa';
 
 function Dashboard({ userId }) {
   // --- SESSION & USER PROFILE STATE ---
@@ -13,12 +13,12 @@ function Dashboard({ userId }) {
   
   // --- MULTIMODAL CAPTURE STATE ---
   const [textInput, setTextInput] = useState('');
+  const [enableLlama, setEnableLlama] = useState(true);
+  const [selectedLanguage, setSelectedLanguage] = useState('English'); // Multilingual State
   const webcamRef = useRef(null);
   const recordingIntervalRef = useRef(null); 
-  const { status, startRecording, stopRecording, mediaBlobUrl } = useReactMediaRecorder({ video: true, audio: true });
-
-  // 🚨 LLM Activation Toggle
-  const [enableLlama, setEnableLlama] = useState(true);
+  
+  const { status, startRecording, stopRecording, mediaBlobUrl, clearBlobUrl } = useReactMediaRecorder({ video: true, audio: true });
 
   // --- COGNITIVE TELEMETRY STATE ---
   const [transcribedText, setTranscribedText] = useState('');
@@ -29,7 +29,6 @@ function Dashboard({ userId }) {
   const [strategy, setStrategy] = useState(null);
   const [frameEmotions, setFrameEmotions] = useState([]); 
 
-  // --- DIAGNOSTIC VISIBILITY TOGGLES ---
   const [visibleModules, setVisibleModules] = useState({
     ClinicalDirective: true, 
     SemanticSignature: true, 
@@ -45,31 +44,45 @@ function Dashboard({ userId }) {
     LLM: "Llama 3.1 (Cognitive Core)"
   };
 
-  // ==========================================
-  // INITIALIZATION: Fetch Profile & Humanize Chat
-  // ==========================================
-  useEffect(() => {
-    const fetchProfile = async () => {
-      try {
-        const res = await fetch(`http://127.0.0.1:8000/api/users/${userId}`);
-        const data = await res.json();
-        if (data.exists) {
-          setProfileData(data.profile);
-          const therapistIntro = `Hello, ${data.profile.name}. I am E-Mitra, your AI Therapist. I have reviewed your clinical baseline. It seems you've been navigating ${data.profile.current_stressor || 'some stress lately'}. I am here to listen. How are you feeling today?`;
-          setChatMessages([{ sender: 'ai', text: therapistIntro }]);
-        } else {
-          setChatMessages([{ sender: 'ai', text: `Patient ID ${userId} profile connection error.` }]);
-        }
-      } catch (err) { console.error("Database connection error"); }
-    };
-    fetchProfile();
-  }, [userId]);
+  // --- INITIALIZATION ---
+// --- INITIALIZATION & MULTILINGUAL GREETING ---
+// --- INITIALIZATION & MULTILINGUAL GREETING ---
+useEffect(() => {
+  const fetchProfile = async () => {
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/api/users/${userId}`);
+      const data = await res.json();
+      if (data.exists) {
+        setProfileData(data.profile);
+        
+        // Use a functional state update to safely inspect previous messages
+        setChatMessages(prev => {
+          // 🚨 CRITICAL: If history already exists, DO NOT wipe it out!
+          if (prev.length > 0) return prev; 
+          
+          const stressor = data.profile.current_stressor || 'some stress lately';
+          let therapistIntro = "";
+
+          if (selectedLanguage === 'Hindi') {
+            therapistIntro = `नमस्ते, ${data.profile.name}। मैं ई-मित्रा हूँ, आपका एआई थेरेपिस्ट। मैंने आपके क्लिनिकल बेसलाइन की समीक्षा की है। ऐसा लगता है कि आप ${stressor} का सामना कर रहे हैं। मैं यहाँ सुनने के लिए हूँ। आज आप कैसा महसूस कर रहे हैं?`;
+          } else if (selectedLanguage === 'Marathi') {
+            therapistIntro = `नमस्कार, ${data.profile.name}। मी ई-मित्रा आहे, तुमचा एआय थेरपिस्ट। मी तुमच्या क्लिनिकल बेसलाइनचे पुनरावलोकन केले आहे. असे दिसते की तुम्ही सध्या ${stressor} चा सामना करत आहात. मी तुम्हाला ऐकण्यासाठी इथे आहे. आज तुम्हाला कसे वाटत आहे?`;
+          } else {
+            therapistIntro = `Hello, ${data.profile.name}. I am E-Mitra, your AI Therapist. I have reviewed your clinical baseline. It seems you've been navigating ${stressor}. I am here to listen. How are you feeling today?`;
+          }
+
+          return [{ sender: 'ai', text: therapistIntro }];
+        });
+      } else {
+        setChatMessages(prev => prev.length > 0 ? prev : [{ sender: 'ai', text: `Patient ID ${userId} profile connection error.` }]);
+      }
+    } catch (err) { console.error("Database connection error"); }
+  };
+  fetchProfile();
+}, [userId]); // <--- 🚨 FIXED: Removed selectedLanguage from dependencies!
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
 
-  // ==========================================
-  // MULTIMODAL LOGIC (Webcam & Audio)
-  // ==========================================
   useEffect(() => {
     if (status === 'recording') {
       setFrameBuffer([]); 
@@ -89,21 +102,58 @@ function Dashboard({ userId }) {
     }
   };
 
-  // ==========================================
-  // CORE PIPELINE: Multimodal Analysis & Chat
-  // ==========================================
+// --- ADVANCED TEXT TO SPEECH ENGINE ---
+  const speakText = (text, language) => {
+    if (!window.speechSynthesis) return alert("Your browser does not support Voice.");
+    
+    window.speechSynthesis.cancel(); // Stop current audio
+    const utterance = new SpeechSynthesisUtterance(text);
+    
+    // Function to apply the best human-like voice
+    const applyBestVoice = () => {
+      const voices = window.speechSynthesis.getVoices();
+      let selectedVoice;
+
+      if (language === 'Hindi') {
+        utterance.lang = 'hi-IN';
+        // Hunt for premium Google Hindi voice
+        selectedVoice = voices.find(v => v.lang.includes('hi') && v.name.includes('Google'));
+        if (!selectedVoice) selectedVoice = voices.find(v => v.lang.includes('hi'));
+      } 
+      else if (language === 'Marathi') {
+        utterance.lang = 'mr-IN';
+        selectedVoice = voices.find(v => v.lang.includes('mr')); // Standard Marathi
+      } 
+      else {
+        utterance.lang = 'en-US';
+        // Hunt for High-Quality "YouTube Video" style voices (Chrome, Mac, Windows)
+        selectedVoice = voices.find(v => v.lang === 'en-US' && v.name.includes('Google US English'));
+        if (!selectedVoice) selectedVoice = voices.find(v => v.lang.includes('en') && (v.name.includes('Samantha') || v.name.includes('Natural')));
+        if (!selectedVoice) selectedVoice = voices.find(v => v.lang === 'en-US');
+      }
+
+      if (selectedVoice) utterance.voice = selectedVoice;
+      
+      utterance.rate = 1.1; // Fixed the "Alien" speed. Normal human speed.
+      utterance.pitch = 1.0;
+      window.speechSynthesis.speak(utterance);
+    };
+
+    // Chrome has a bug where voices don't load instantly. This safely waits for them.
+    if (window.speechSynthesis.getVoices().length === 0) {
+      window.speechSynthesis.onvoiceschanged = applyBestVoice;
+    } else {
+      applyBestVoice();
+    }
+  };
+
+  // --- MAIN PROCESSING PIPELINE ---
   const executePipeline = async () => {
     if (!textInput.trim() && !mediaBlobUrl) return alert("Please provide input (type or record).");
     
     setIsLoading(true);
-    
-    // Clear previous telemetry for fresh run
-    setTextResults(null);
-    setAudioResults(null);
-    setVideoResults(null);
-    setFusedResults(null);
-    setStrategy(null);
-    setFrameEmotions([]);
+    setTextResults(null); setAudioResults(null); setVideoResults(null);
+    setFusedResults(null); setStrategy(null); setFrameEmotions([]);
     setTranscribedText('');
 
     let finalTranscribedText = textInput; 
@@ -124,19 +174,24 @@ function Dashboard({ userId }) {
         formPayload.append("audio", mediaBlob, "recording.webm");
       }
 
+      // 1. Run Multimodal Analysis
       const response = await fetch('http://127.0.0.1:8000/analyze-multimodal', { method: 'POST', body: formPayload });
       const data = await response.json();
       
-      // Safely map data using optional chaining to prevent text-only crashes
       if (data.text_emotions?.length > 0) setTextResults(data.text_emotions);
       if (data.audio_emotions?.length > 0) setAudioResults(data.audio_emotions);
       if (data.video_emotions?.length > 0) setVideoResults(data.video_emotions);
       if (data.frame_emotions?.length > 0) setFrameEmotions(data.frame_emotions);
       
-      if (data.transcribed_text) { setTranscribedText(data.transcribed_text); finalTranscribedText = data.transcribed_text; }
+      if (data.transcribed_text) { 
+        setTranscribedText(data.transcribed_text); 
+        if (!textInput.trim()) finalTranscribedText = data.transcribed_text; 
+      }
+      
       if (data.fused_score?.length > 0) { setFusedResults(data.fused_score); finalEmotion = data.fused_score[0].label; }
       if (data.strategy) { setStrategy(data.strategy); finalStrategy = data.strategy.name; }
 
+      // 2. Generate LLM Response with Language Awareness
       if (finalTranscribedText.trim()) {
         setChatMessages(prev => [...prev, { sender: 'user', text: finalTranscribedText }]);
         
@@ -145,9 +200,13 @@ function Dashboard({ userId }) {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    user_id: userId, user_message: finalTranscribedText, emotion_state: finalEmotion,
-                    clinical_strategy: finalStrategy, emotion_journey: data.frame_emotions || [],
-                    chat_history: chatMessages.map(msg => ({ role: msg.sender === 'user' ? 'user' : 'assistant', content: msg.text }))
+                    user_id: userId, 
+                    user_message: finalTranscribedText, 
+                    emotion_state: finalEmotion,
+                    clinical_strategy: finalStrategy, 
+                    emotion_journey: data.frame_emotions || [],
+                    chat_history: chatMessages.map(msg => ({ role: msg.sender === 'user' ? 'user' : 'assistant', content: msg.text })),
+                    language: selectedLanguage // Pass selected language to Llama 3.1
                 })
             });
             
@@ -155,15 +214,15 @@ function Dashboard({ userId }) {
             setChatMessages(prev => [...prev, { sender: 'ai', text: chatData.reply }]);
         }
         
+        // Reset Inputs
         setTextInput(''); 
+        setFrameBuffer([]);
+        if (clearBlobUrl) clearBlobUrl(); 
       }
-    } catch (error) { alert("Diagnostic Pipeline Error. Is FastAPI running?"); } 
+    } catch (error) { alert("Pipeline Error. Is the backend running?"); } 
     finally { setIsLoading(false); }
   };
 
-  // ==========================================
-  // RENDER: UNIFIED GRID LAYOUT
-  // ==========================================
   return (
     <div style={{ 
       width: '100%', maxWidth: '1400px', height: 'calc(100vh - 80px)', margin: '0 auto', 
@@ -172,138 +231,105 @@ function Dashboard({ userId }) {
       borderRadius: '16px', overflow: 'hidden', boxShadow: '0 10px 40px rgba(0,0,0,0.5)' 
     }}>
       
-      {/* 🟦 TOP-LEFT: MULTIMODAL CAPTURE */}
+      {/* LEFT PANEL: CAPTURE & SETTINGS */}
       <div style={{ gridColumn: '1', gridRow: '1', background: 'rgba(11, 17, 32, 0.85)', backdropFilter: 'blur(16px)', padding: '25px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
         <h2 style={{ margin: 0, fontSize: '16px', color: '#a5b4fc', textTransform: 'uppercase', letterSpacing: '1px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <FaVideo /> Multimodal Capture
         </h2>
         
-        <textarea rows="3" className="lofi-input" style={{ marginBottom: 0 }} value={textInput} onChange={e => setTextInput(e.target.value)} placeholder="Type manual input here..." />
+        <textarea rows="3" className="lofi-input" value={textInput} onChange={e => setTextInput(e.target.value)} placeholder="Type manual input here..." />
         
-        <div style={{ position: 'relative', backgroundColor: '#000', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', height: '160px', overflow: 'hidden', boxShadow: 'inset 0 0 10px rgba(0,0,0,0.8)' }}>
+        <div style={{ position: 'relative', backgroundColor: '#000', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', height: '160px', overflow: 'hidden' }}>
           <Webcam audio={false} ref={webcamRef} screenshotFormat="image/jpeg" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
           <div style={{ position: 'absolute', top: '10px', right: '10px', fontSize: '12px', fontWeight: 'bold', padding: '4px 8px', borderRadius: '4px', background: 'rgba(0,0,0,0.6)', color: status === 'recording' ? '#ef4444' : '#10b981' }}>
             {status === 'recording' ? '● REC' : 'IDLE'}
           </div>
         </div>
 
-        {/* 🚨 NEW: Single Dynamic Toggle Button for Recording */}
         <button 
           className="lofi-btn" 
           onClick={status === 'recording' ? stopRecording : startRecording} 
-          style={{ 
-            width: '100%', 
-            padding: '12px', 
-            fontSize: '15px', 
-            background: status === 'recording' ? 'rgba(239, 68, 68, 0.8)' : '#4f46e5', 
-            color: '#fff',
-            border: status === 'recording' ? '1px solid #fca5a5' : 'none',
-            boxShadow: status === 'recording' ? '0 0 15px rgba(239, 68, 68, 0.5)' : '',
-            transition: 'all 0.3s ease'
-          }}
+          style={{ width: '100%', padding: '12px', background: status === 'recording' ? 'rgba(239, 68, 68, 0.8)' : '#4f46e5' }}
         >
           {status === 'recording' ? "⏹ STOP RECORDING" : "▶ START AUDIO/VIDEO"}
         </button>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#cbd5e1', fontSize: '15px', cursor: 'pointer', marginTop: '5px', background: 'rgba(255,255,255,0.05)', padding: '10px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }}>
-          <input 
-            type="checkbox" 
-            checked={enableLlama} 
-            onChange={(e) => setEnableLlama(e.target.checked)} 
-            style={{ width: '18px', height: '18px', accentColor: '#10b981', cursor: 'pointer' }} 
-          />
-          Activate LLM Therapy Response (Llama 3.1)
-        </label>
+        {/* SETTINGS & LANGUAGE */}
+        <div style={{ background: 'rgba(255,255,255,0.05)', padding: '15px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#cbd5e1', fontSize: '14px', marginBottom: '12px' }}>
+            <input type="checkbox" checked={enableLlama} onChange={(e) => setEnableLlama(e.target.checked)} style={{ width: '18px', height: '18px', accentColor: '#10b981' }} />
+            Activate LLM Therapy (Llama 3.1)
+          </label>
 
-        <button className="lofi-btn" onClick={executePipeline} disabled={isLoading} style={{ width: '100%', padding: '15px', marginTop: '5px', fontSize: '16px', background: enableLlama ? '#10b981' : '#38bdf8', color: '#000', fontWeight: 'bold' }}>
-          {isLoading ? "PROCESSING..." : (enableLlama ? "ANALYZE & GENERATE RESPONSE" : "RUN DIAGNOSTICS ONLY")}
+          <p style={{ margin: '0 0 5px 0', fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase' }}>Therapy Language</p>
+          <select 
+            value={selectedLanguage} 
+            onChange={(e) => setSelectedLanguage(e.target.value)}
+            style={{ width: '100%', padding: '10px', background: '#000', color: '#fff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '6px' }}
+          >
+            <option value="English">English</option>
+            <option value="Hindi">Hindi (हिंदी)</option>
+            <option value="Marathi">Marathi (मराठी)</option>
+          </select>
+        </div>
+
+        <button className="lofi-btn" onClick={executePipeline} disabled={isLoading} style={{ width: '100%', padding: '15px', background: '#10b981', color: '#000', fontWeight: 'bold' }}>
+          {isLoading ? "PROCESSING..." : "ANALYZE & GENERATE RESPONSE"}
         </button>
       </div>
 
-      {/* 🟦 BOTTOM-LEFT: COGNITIVE TELEMETRY */}
+      {/* LEFT PANEL: TELEMETRY */}
       <div style={{ gridColumn: '1', gridRow: '2', background: 'rgba(11, 17, 32, 0.85)', backdropFilter: 'blur(16px)', padding: '25px', overflowY: 'auto' }}>
-        <h2 style={{ margin: '0 0 20px 0', fontSize: '16px', color: '#a5b4fc', textTransform: 'uppercase', letterSpacing: '1px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <h2 style={{ margin: '0 0 20px 0', fontSize: '16px', color: '#a5b4fc', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <FaBrain /> Cognitive Telemetry
         </h2>
 
-        {/* Consensus State */}
         <div style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '15px', marginBottom: '20px' }}>
-          <p style={{ margin: '0 0 5px 0', color: '#cbd5e1', fontSize: '12px', textTransform: 'uppercase' }}>Consensus Emotion State</p>
-          <div style={{ fontSize: '28px', color: '#fff', fontWeight: 'bold' }}>
+          <p style={{ margin: '0 0 5px 0', color: '#cbd5e1', fontSize: '11px' }}>FUSED EMOTION STATE</p>
+          <div style={{ fontSize: '24px', color: '#fff', fontWeight: 'bold' }}>
               {fusedResults ? `${fusedResults[0].label.toUpperCase()} (${(fusedResults[0].score * 100).toFixed(0)}%)` : 'AWAITING SIGNAL'}
           </div>
         </div>
 
-        {/* Analyzed Keyframes */}
+        {/* KEYFRAMES */}
         <div style={{ marginBottom: '20px' }}>
-          <p style={{ margin: '0 0 10px 0', color: '#cbd5e1', fontSize: '12px', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '6px' }}><FaClock /> Expression Keyframes</p>
+          <p style={{ margin: '0 0 10px 0', color: '#cbd5e1', fontSize: '11px' }}><FaClock /> EXPRESSION KEYFRAMES</p>
           <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '10px' }}>
-            {frameBuffer.length > 0 ? (
-              frameBuffer.map((imgSrc, index) => (
-                <div key={index} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', minWidth: '70px' }}>
-                  <img src={imgSrc} alt="frame" style={{ height: '60px', borderRadius: '4px', border: '1px solid rgba(165,180,252,0.4)' }} />
-                  {frameEmotions[index] && <span style={{ fontSize: '10px', color: '#86efac', background: '#000', padding: '2px 6px', borderRadius: '4px' }}>{frameEmotions[index]}</span>}
-                </div>
-              ))
-            ) : ( <span style={{ fontSize: '13px', color: '#94a3b8', fontStyle: 'italic' }}>No visual data captured.</span> )}
+            {frameBuffer.length > 0 ? frameBuffer.map((imgSrc, index) => (
+              <div key={index} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
+                <img src={imgSrc} alt="frame" style={{ height: '50px', borderRadius: '4px', border: '1px solid rgba(165,180,252,0.4)' }} />
+                {frameEmotions[index] && <span style={{ fontSize: '9px', color: '#86efac', background: '#000', padding: '2px 4px' }}>{frameEmotions[index]}</span>}
+              </div>
+            )) : <span style={{ fontSize: '12px', color: '#64748b' }}>No visual data.</span>}
           </div>
         </div>
 
-        {/* Dynamic Modals based on Toggles */}
+        {/* DIAGNOSTIC MODULES */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
-            {Object.keys(visibleModules).map(key => (
-              <button key={key} onClick={() => setVisibleModules(p => ({...p, [key]: !p[key]}))} style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer', border: '1px solid', borderColor: visibleModules[key] ? '#a5b4fc' : 'rgba(255,255,255,0.2)', background: visibleModules[key] ? 'rgba(165,180,252,0.2)' : 'transparent', color: '#fff' }}>
-                {key.replace(/([A-Z])/g, ' $1').trim()}
-              </button>
-            ))}
-          </div>
-
           {visibleModules.ClinicalDirective && strategy && (
-            <div style={{ padding: '12px', background: 'rgba(255,255,255,0.05)', borderRadius: '6px', borderLeft: '3px solid #818cf8' }}>
-              <p style={{ margin: '0 0 5px 0', fontSize: '12px', color: '#818cf8', fontWeight: 'bold' }}>Clinical Directive ({modelRegistry.LLM})</p>
-              <p style={{ margin: 0, fontSize: '14px', color: '#cbd5e1' }}>{strategy.description}</p>
+            <div style={{ padding: '12px', background: 'rgba(129, 140, 248, 0.1)', borderRadius: '6px', borderLeft: '3px solid #818cf8' }}>
+              <p style={{ margin: '0 0 5px 0', fontSize: '11px', color: '#818cf8', fontWeight: 'bold' }}>CLINICAL STRATEGY</p>
+              <p style={{ margin: 0, fontSize: '13px', color: '#cbd5e1' }}>{strategy.description}</p>
             </div>
           )}
-
           <div style={{ display: 'flex', gap: '10px' }}>
-            {visibleModules.SemanticSignature && (
-              <div style={{ flex: 1, padding: '10px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px' }}>
-                <p style={{ margin: '0 0 8px 0', fontSize: '11px', color: '#cbd5e1' }}>SEMANTIC ({modelRegistry.Text.split(' ')[0]})</p>
-                {textResults ? textResults.slice(0,3).map((e,i) => <div key={i} style={{fontSize:'12px', display:'flex', justifyContent:'space-between', color: '#fff'}}><span style={{textTransform:'capitalize'}}>{e.label}</span><span>{(e.score*100).toFixed(0)}%</span></div>) : <span style={{fontSize:'12px', color:'#94a3b8'}}>No Data</span>}
-              </div>
-            )}
-            {visibleModules.ProsodyProfile && (
-              <div style={{ flex: 1, padding: '10px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px' }}>
-                <p style={{ margin: '0 0 8px 0', fontSize: '11px', color: '#cbd5e1' }}>PROSODY ({modelRegistry.Audio.split(' ')[0]})</p>
-                {audioResults ? audioResults.slice(0,3).map((e,i) => <div key={i} style={{fontSize:'12px', display:'flex', justifyContent:'space-between', color: '#fff'}}><span style={{textTransform:'capitalize'}}>{e.label}</span><span>{(e.score*100).toFixed(0)}%</span></div>) : <span style={{fontSize:'12px', color:'#94a3b8'}}>No Data</span>}
-              </div>
-            )}
+            <div style={{ flex: 1, padding: '10px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px' }}>
+              <p style={{ fontSize: '10px', color: '#cbd5e1' }}>SEMANTIC (Text)</p>
+              {textResults?.slice(0,2).map((e,i) => <div key={i} style={{fontSize:'11px', display:'flex', justifyContent:'space-between'}}><span>{e.label}</span><span>{(e.score*100).toFixed(0)}%</span></div>)}
+            </div>
+            <div style={{ flex: 1, padding: '10px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px' }}>
+              <p style={{ fontSize: '10px', color: '#cbd5e1' }}>PROSODY (Audio)</p>
+              {audioResults?.slice(0,2).map((e,i) => <div key={i} style={{fontSize:'11px', display:'flex', justifyContent:'space-between'}}><span>{e.label}</span><span>{(e.score*100).toFixed(0)}%</span></div>)}
+            </div>
           </div>
-
-          {visibleModules.ExpressionMap && (
-              <div style={{ padding: '10px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px' }}>
-                <p style={{ margin: '0 0 8px 0', fontSize: '11px', color: '#cbd5e1' }}>EXPRESSION ({modelRegistry.Video.split(' ')[0]})</p>
-                {videoResults ? (
-                  <div style={{ display: 'flex', gap: '15px' }}>
-                    {videoResults.slice(0,3).map((e,i) => <div key={i} style={{fontSize:'13px', flex: 1, color: '#fff'}}><span style={{textTransform:'capitalize'}}>{e.label}:</span> {(e.score*100).toFixed(0)}%</div>)}
-                  </div>
-                ) : <span style={{fontSize:'12px', color:'#94a3b8'}}>No Data</span>}
-              </div>
-          )}
         </div>
       </div>
 
-      {/* 🟦 RIGHT: THERAPY CHAT */}
+      {/* RIGHT PANEL: CHAT LOG */}
       <div style={{ gridColumn: '2', gridRow: '1 / 3', background: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(12px)', display: 'flex', flexDirection: 'column' }}>
-        
         <div style={{ padding: '20px 30px', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h1 style={{ margin: 0, fontSize: '22px', color: '#fff', display: 'flex', alignItems: 'center', gap: '10px' }}><FaRegCommentDots /> Session Log: {userId}</h1>
-            <p style={{ margin: '5px 0 0 0', fontSize: '13px', color: '#10b981' }}>● Connection Secure & Encrypted</p>
-          </div>
-          <button onClick={() => window.location.reload()} style={{ background: 'transparent', color: '#ef4444', border: '1px solid #ef4444', padding: '8px 16px', borderRadius: '20px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <h1 style={{ margin: 0, fontSize: '20px', color: '#fff', display: 'flex', alignItems: 'center', gap: '10px' }}><FaRegCommentDots /> Session Log: {userId}</h1>
+          <button onClick={() => window.location.reload()} style={{ background: 'transparent', color: '#ef4444', border: '1px solid #ef4444', padding: '8px 16px', borderRadius: '20px', cursor: 'pointer' }}>
             <FaPowerOff /> End Session
           </button>
         </div>
@@ -313,16 +339,20 @@ function Dashboard({ userId }) {
             const isUser = msg.sender === 'user';
             return (
               <div key={idx} style={{ alignSelf: isUser ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
-                <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '6px', textAlign: isUser ? 'right' : 'left' }}>
-                  {isUser ? (profileData ? profileData.name : 'You') : 'E-Mitra'}
-                </div>
+                <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '4px', textAlign: isUser ? 'right' : 'left' }}>{isUser ? 'You' : 'Dr. E-Mitra'}</div>
                 <div style={{ 
                   background: isUser ? 'rgba(79, 70, 229, 0.8)' : 'rgba(255, 255, 255, 0.1)',
-                  backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.1)',
-                  padding: '16px 20px', borderRadius: isUser ? '20px 20px 4px 20px' : '20px 20px 20px 4px',
-                  color: '#fff', fontSize: '16px', lineHeight: '1.5', boxShadow: '0 4px 15px rgba(0,0,0,0.2)'
+                  padding: '12px 18px', borderRadius: '15px', color: '#fff', fontSize: '15px'
                 }}>
                   {msg.text}
+                  {!isUser && (
+                     <button 
+                       onClick={() => speakText(msg.text, selectedLanguage)}
+                       style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '10px', background: 'rgba(16, 185, 129, 0.3)', color: '#10b981', border: '1px solid #10b981', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}
+                     >
+                       <FaVolumeUp /> Listen
+                     </button>
+                  )}
                 </div>
               </div>
             );
@@ -330,7 +360,6 @@ function Dashboard({ userId }) {
           <div ref={chatEndRef} />
         </div>
       </div>
-
     </div>
   );
 }
